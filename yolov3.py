@@ -2,36 +2,54 @@ import numpy as np
 np.random.seed(101)
 import tensorflow as tf
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
-
+import utils
 
 class YOLOv3(object):
     """Structure of reseau neural YOLO3"""
 
     # def __init__(self, x, num_classes, trainable=True, strategie_training=False, is_training=False):
-    def __init__(self, x, num_classes, weight_h5_filepath, trainable=True):
+    def __init__(self, x, num_classes, cfg_filepath, weight_filepath, trainable=True):
         """
         Create the graph ofthe YOLOv3 model
+        | Parameters
+        | input          | tf.Tensor |
+        | trainable      | bool      |
         :param x: Placeholder for the input tensor: (normalised image (416, 416, 3)/255.)
         :param num_classes: Number of classes in the dataset
                if it isn't in the same folder as this code
         """
         self.X = x
         self.NUM_CLASSES = num_classes
+        self.cfg_parser = utils.read_cfg_file(config_filepath=cfg_filepath)
         self.weight_h5_filepath = weight_h5_filepath
         self.trainable=trainable
-        # self.is_training=is_training
-        # self.ST = False
-        # if strategie_training==1:
-        #     self.ST = True
 
     #===================================================================================================================
-    def feature_extractor(self):
+    def __call__(self, input):
         """
         Create the network graph
-        :return: feature maps 5+80 in 3 grid (13,13), (26,26), (52, 52)
+        |-Parameters
+        | input          | tf.Tensor |
+        | fine_tuning    | bool      |
+        |
+        |-Returns
+        | feature maps 5+80 in 3 grid (13,13), (26,26), (52, 52)
         """
+        features_odict, scale_0_odict, scale_1_odict, scale_2_odict = \
+            utils.split_layer_structure(config_parser=self.cfg_parser)
+        
         print("YOLOv3, let's go!!!!!!!")
+        layer = input
+        self.layer_idx = 0
+        self.layers_list = []
+        #===========================================================================================
+        with tf.name_scope("Features"):
+            for _section, _proxy in features_odict.items():
+                assert len(_section.split("_")) == 2
+                select_layer(section=_section, proxy=_proxy, inputs=layer)
+                layer_idx += 1
+                self.layers_list.append(layer)
+
         #===========================================================================================
         with tf.name_scope("Features"):
             conv_1 = self.conv2d(self.X, 1)
@@ -211,13 +229,86 @@ class YOLOv3(object):
         return conv_59, conv_67, conv_75
 
     #===================================================================================================================
+    def select_layer(self, section, proxy, inputs):
+        """
+        | section | str                       |
+        | proxy   | configparser.SectionProxy |
+        | inputs  | tf.Tensor                 |
+        """
+        section_name, order_idx = section.split("_")
+        if section_name == "convolutional":
+            #====================
+            layer = self.conv2d(inputs         =inputs,
+                                order_idx      =int(order_idx),
+                                batch_normalize=int(proxy["batch_normalize"]),
+                                filters        =int(proxy["filters"]),
+                                kernel_size    =int(proxy["kernel_size"]),
+                                stride         =int(proxy["stride"]),
+                                pad            =int(proxy["pad"]),
+                                activation     =int(proxy["activation"]),
+                                fine_tuning    =self.trainable)
+        elif section_name == "route":
+            #====================
+            proxy["layers"].split
+            layers = [int(a) for a in layers]
+            # "-1, 4"
+            layers = list(map(int, config_parser_proxy["layers"].split(",")))
+            assert 0 < len(layers) and len(layers) <= 2
+
+            # 現在のindexからの「負の相対的な数値」で表す
+            layers = list(map(check_positive, layer))
+            def check_positive(a)
+                return a - self.layer_idx if a > 0 else a
+
+            with tf.name_scope(name=section):
+                if len(layers) == 1:
+                    # 値が1つのときはその値と一つ前のレイヤ
+                    layer = self.layers_list[i + (layers[0])]
+                else:
+                    # 値が2つのときはそれらをchannel軸でconcatenate
+                    in_idx1, in_idx2 = self.layer_idx + layers[0], self.layer_idx + layers[1]
+                    layer = tf.concat(values=[self.layers_list[in_idx1], self.layers_list[in_idx2]],
+                                       axis=-1, name='concatenate')
+        elif section_name == "shortcut":
+            #====================
+            _input = self.layers_list[self.layer_idx-1]
+            with tf.name_scope(section):
+                # 同じサイズ同士のテンソルを足す
+                _from = int(proxy["from"])
+                _acti = proxy["activation"]
+                assert _acti == "linear"
+                layer = _input + self.layers_list[self.layer_idx-_from]
+        elif section_name == "upsample":
+            #====================
+            _input = self.layers_list[self.layer_idx-1]
+            with tf.name_scope(section):
+                _, h, w, _ = tf.shape(_input)  # [batch, height, width, channels]
+                _size = proxy["stride"]
+                layer = tf.image.resize_images(images=_input, size=[_size * h, _size * w],  # [new_height, new_width]
+                                               method=ResizeMethod.NEAREST_NEIGHBOR, align_corners=False)
+        elif section_name == "yolo":
+            #====================
+            pass
+        elif section_name == "net"
+            #====================
+            pass
+        else:
+            #====================
+            raise ValueError('Unsupported section header type: {}'.format(section))
+
+        return layer
+
+    #===================================================================================================================
     def conv2d(self,
                inputs,
-               idx,
-               stride=1,
-               batch_norm_and_activation=True,
-               trainable=False,
-               phase_train=False):
+               order_idx,
+               batch_normalize
+               filters,
+               kernel_size,
+               stride,
+               pad,
+               activation,
+               fine_tuning=False):
         """
         batch_normalize=1 True
         filters=32
@@ -228,33 +319,35 @@ class YOLOv3(object):
 
         Convolutional layer
         |-Parameters
-        | inputs                    | tf.Tensor | size = (batch, channel, height, width)
-        | idx                       | int       | conv layer's number
-        | stride                    | int       |
-        | name                      | str       |
-        | batch_norm_and_activation | bool      | default True
-        | trainable                 | bool      | default False
-        | phase_train               | bool      | default False
+        | inputs          | tf.Tensor | size = (batch, channel, height, width)
+        | order_idx       | int       | conv layer's number
+        | batch_normalize | int       | 0 or 1
+        | filters         | int       |
+        | kernel_size     | int       | [kernel_size, kernel_size]
+        | stride          | int       |
+        | pad             | int       | 0(False) or 1(True)
+        | activation      | str       | "leaky", "linear"
+        | fine_tuning     | bool      | default False
+        |
         |-Returns
         """
         name_dict = {
-            "conv"     : "conv_{}".format(idx),
-            "weights"  : "weights_{}".format(idx),
-            "biases"   : "biases_{}".format(idx),
-            "mov_mean" : "moving_mean_{}".format(idx),
-            "mov_vari" : "moving_variance_{}".format(idx),
-            "beta"     : "beta_{}".format(idx),
-            "gamma"    : "gamma_{}".format(idx),
+            "conv"     : "conv_{}".format(order_idx),
+            "weights"  : "weights_{}".format(order_idx),
+            "biases"   : "biases_{}".format(order_idx),
+            "mov_mean" : "moving_mean_{}".format(order_idx),
+            "mov_vari" : "moving_variance_{}".format(order_idx),
+            "beta"     : "beta_{}".format(order_idx),
+            "gamma"    : "gamma_{}".format(order_idx),
         }
-        tous = False
         with tf.variable_scope(name_dict["conv"]):
             #===============================================
             if trainable == True:
                 # we will initialize weights by a Gaussian distribution with mean 0 and variance 1/sqrt(n)
                 # don't set all = 0 or =
-                if idx == 59:  # scale1
+                if order_idx == 59:  # scale1
                     weights_shape = [1, 1, 1024, 3 * (self.NUM_CLASSES + 1 + 4)]
-                elif idx == 67:  # scale2
+                elif order_idx == 67:  # scale2
                     weights_shape = [1, 1,  512, 3 * (self.NUM_CLASSES + 1 + 4)]
                 else:  # scalse3
                     weights_shape = [1, 1,  256, 3 * (self.NUM_CLASSES + 1 + 4)]
@@ -264,13 +357,15 @@ class YOLOv3(object):
                 #    initial_value=np.random.normal(loc=0.0, scale=0.01, size=weights_shape),
                 #    trainable=True, dtype=np.float32, name="weights")
             else:
-                weights = tf.Variable(initial_value=W(number_conv=idx, weight_h5_filepath=self.weight_h5_filepath),
-                                      trainable=tous, dtype=tf.float32, name="weights")
+                weights = tf.Variable(initial_value=self.W(number_conv=order_idx, weight_h5_filepath=self.weight_h5_filepath),
+                                      trainable=False, dtype=tf.float32, name="weights")
   
             tf.summary.histogram(name=name_dict["weights"], values=weights)
 
             #===============================================
             if stride == 2:
+                # > Darknet uses left and top padding instead of 'same' mode
+                # > https://github.com/qqwweee/keras-yolo3/blob/e6598d13c703029b2686bc2eb8d5c09badf42992/convert.py#L165-L167
                 paddings = tf.constant([[0, 0], [1, 0], [1, 0], [0, 0]])
                 inputs_pad = tf.pad(tensor=inputs, paddings=paddings, mode="CONSTANT")
                 conv = tf.nn.conv2d(input=inputs_pad, filter=weights, strides=[1, stride, stride, 1], padding='VALID', name="conv")
@@ -294,23 +389,23 @@ class YOLOv3(object):
                     #                     mean_var_with_update,
                     #                     lambda: (ema.average(batch_mean), ema.average(batch_var)))
 
-                    moving_mean, moving_variance, beta, gamma = self.B(number_conv=idx, weight_h5_filepath=self.weight_h5_filepath)
+                    moving_mean, moving_variance, beta, gamma = self.B(number_conv=order_idx, weight_h5_filepath=self.weight_h5_filepath)
 
-                    moving_mean     = tf.Variable(initial_value=moving_mean, trainable=tous, dtype=tf.float32, name="moving_mean")
-                    moving_variance = tf.Variable(initial_value=moving_variance, trainable=tous, dtype=tf.float32, name="moving_variance")
-                    beta            = tf.Variable(initial_value=beta, trainable=tous, dtype=tf.float32, name="beta")
-                    gamma           = tf.Variable(initial_value=gamma, trainable=tous, dtype=tf.float32, name="gamma")
+                    moving_mean     = tf.Variable(initial_value=moving_mean,     trainable=False, dtype=tf.float32, name="moving_mean")
+                    moving_variance = tf.Variable(initial_value=moving_variance, trainable=False, dtype=tf.float32, name="moving_variance")
+                    beta            = tf.Variable(initial_value=beta,            trainable=False, dtype=tf.float32, name="beta")
+                    gamma           = tf.Variable(initial_value=gamma,           trainable=False, dtype=tf.float32, name="gamma")
 
                     tf.summary.histogram(name=name_dict["mov_mean"], value=moving_mean)
                     tf.summary.histogram(name=name_dict["mov_vari"], value=moving_variance)
-                    tf.summary.histogram(name=name_dict["beta"], value=beta)
-                    tf.summary.histogram(name=name_dict["gamma"], value=gamma)
+                    tf.summary.histogram(name=name_dict["beta"],     value=beta)
+                    tf.summary.histogram(name=name_dict["gamma"],    value=gamma)
 
                     conv = tf.nn.batch_normalization(x=conv, mean=moving_mean, variance=moving_variance, offset=beta,
                                                      scale=gamma, variance_epsilon=variance_epsilon, name='BatchNorm')
                 with tf.name_scope('Activation'):
                     # leaky relu : https://towardsdatascience.com/activation-functions-neural-networks-1cbd9f8d91d6
-                    alpha = tf.constant(0.1, name="alpha")  # Slope of the activation function at x < 0
+                    alpha = tf.constant(value=0.1, name="alpha")  # Slope of the activation function at x < 0
                     acti = tf.maximum(alpha * conv, conv)
                 return acti
 
@@ -323,7 +418,7 @@ class YOLOv3(object):
                         trainable=True,
                         dtype=np.float32, name="biases")
                 else:
-                    biases = tf.Variable(initial_value=self.B(number_conv=idx, weight_h5_filepath=self.weight_h5_filepath),
+                    biases = tf.Variable(initial_value=self.B(number_conv=order_idx, weight_h5_filepath=self.weight_h5_filepath),
                                          trainable=False, dtype=tf.float32, name="biases")
                 tf.summary.histogram(name=name_dict["biases"], values=biases)  # add summary
                 conv = tf.add(conv, biases)
@@ -425,3 +520,19 @@ class YOLOv3(object):
         with tf.name_scope(name_res):
             resn = a + b
             return resn
+
+    @staticmethod
+    def yolo_predict():
+        """
+        | Parameters
+        """
+        name = "predict_
+        with tf.name_scope(name):
+            _boxes, _box_scores = yolo_boxes_and_scores(yolo_outputs[mask],
+                                                        anchors[anchor_mask[mask]],
+                                                        num_classes,
+                                                        input_shape,
+                                                        image_shape)
+
+            boxes.append(_boxes)  # list(3 array): [3, None*13*13*3, 4]
+            box_scores.append(_box_scores)  # list(3 array): [3, None*13*13*3, 80]
